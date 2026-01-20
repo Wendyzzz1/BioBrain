@@ -3,15 +3,18 @@ import sqlite3
 import pandas as pd
 import PyPDF2
 import time
+import os
 
 # --- Database & Helper Functions ---
 def get_connection():
+    # 使用当前目录下的数据库文件
     return sqlite3.connect("biobrain.db")
 
 def extract_text_from_pdf(uploaded_file):
     try:
         pdf_reader = PyPDF2.PdfReader(uploaded_file)
         text = ""
+        # Read only the first 2 pages to save time/tokens
         for page in pdf_reader.pages[:2]:
             text += page.extract_text()
         return text
@@ -36,7 +39,7 @@ with st.sidebar:
     st.header("📍 Navigation")
     menu = st.radio("", ["📥 Log New Paper (AI)", "🔍 Problem Index", "📊 Dashboard"])
     st.markdown("---")
-    st.info("v0.2 (AI Beta)")
+    st.info("v0.2 (Cloud Edition)")
 
 # --- Feature A: Log New Paper ---
 if menu == "📥 Log New Paper (AI)":
@@ -89,5 +92,39 @@ if menu == "📥 Log New Paper (AI)":
             conn = get_connection()
             c = conn.cursor()
             try:
+                # 自动建表，防止第一次运行没有表
                 c.execute('''CREATE TABLE IF NOT EXISTS papers (id INTEGER PRIMARY KEY, title TEXT, first_author TEXT, year INTEGER, category TEXT, problem_solved TEXT, key_finding TEXT, methodology TEXT, rating INTEGER)''')
-                c.
+                
+                # 插入数据
+                c.execute('INSERT INTO papers (title, first_author, year, category, problem_solved, key_finding, methodology, rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', 
+                          (title, first_author, year, category, problem, key_finding, methodology, rating))
+                conn.commit()
+                st.success(f"✅ Saved '{title}'")
+            except Exception as e:
+                st.error(f"Error saving to DB: {e}")
+            finally:
+                conn.close()
+
+# --- Feature B: Problem Index ---
+elif menu == "🔍 Problem Index":
+    st.header("📚 Problem Index")
+    conn = get_connection()
+    try:
+        # 确保表存在，防止报错
+        conn.execute('''CREATE TABLE IF NOT EXISTS papers (id INTEGER PRIMARY KEY, title TEXT, first_author TEXT, year INTEGER, category TEXT, problem_solved TEXT, key_finding TEXT, methodology TEXT, rating INTEGER)''')
+        
+        df = pd.read_sql("SELECT * FROM papers ORDER BY id DESC", conn)
+        if not df.empty:
+            for i, row in df.iterrows():
+                with st.expander(f"📌 {row['problem_solved']}"):
+                    st.markdown(f"**{row['title']}**")
+                    st.info(f"Finding: {row['key_finding']}")
+        else:
+            st.info("Library is empty. Go to 'Log New Paper' to add your first entry!")
+    except Exception as e:
+        st.error(f"Database Error: {e}")
+    finally:
+        conn.close()
+
+elif menu == "📊 Dashboard":
+    st.info("Dashboard stats coming soon.")
