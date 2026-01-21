@@ -35,7 +35,7 @@ def analyze_with_gemini(api_key, text_content):
     """
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
         You are an expert scientific researcher. Analyze the following academic paper text and extract key information.
