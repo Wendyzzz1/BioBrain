@@ -6,9 +6,9 @@ import google.generativeai as genai
 import json
 
 # --- Page Setup ---
-st.set_page_config(page_title="BioBrain v2.5", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="BioBrain v3.0", layout="wide", page_icon="🧠")
 
-# --- Database & AI Functions ---
+# --- Database Functions ---
 def get_connection():
     return sqlite3.connect("biobrain.db")
 
@@ -44,24 +44,49 @@ def extract_text_from_pdf(uploaded_file):
     except:
         return None
 
+# --- AI Function (The Fix) ---
 def analyze_with_gemini(api_key, text_content):
     try:
         genai.configure(api_key=api_key)
-        # Using the model you confirmed works
+        
+        # 1. 设置模型
         model = genai.GenerativeModel('models/gemini-2.5-flash')
         
+        # 2. 清洗 PDF 里的脏字符 (第一道防线)
+        clean_content = text_content.encode('utf-8', 'ignore').decode('utf-8')
+        
         prompt = f"""
-        Analyze this paper. Return JSON only.
-        Keys: title, author, year, category, problem, finding, method.
-        Text: {text_content[:30000]}
-        """
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
-    except Exception as e:
-        return {"error": str(e)}
+        You are a research assistant. Extract data from this text.
+        Response must be valid JSON.
+        
+        Keys needed:
+        - title (string)
+        - author (string)
+        - year (integer)
+        - category (string, choose from: Gene Therapy, Cell Therapy, Targets, Clinical, AI, Methodology)
+        - problem (string)
+        - finding (string)
+        - method (string)
 
-# --- Main App ---
+        Text:
+        {clean_content[:30000]}
+        """
+        
+        # 3. 开启“强制 JSON 模式” (第二道防线 - 核心修复)
+        # 这会强制 AI 就算遇到脏字符，也要转义成合法的 JSON 格式
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        # 4. 解析结果
+        return json.loads(response.text)
+        
+    except Exception as e:
+        # 如果还是出错，返回错误信息给界面
+        return {"error": f"JSON Parsing Error: {str(e)}"}
+
+# --- Main App Logic ---
 init_db()
 
 with st.sidebar:
@@ -84,22 +109,21 @@ if menu == "Log Paper":
     uploaded_file = st.file_uploader("Drop PDF here", type=["pdf"])
 
     if uploaded_file:
-        # 这个地方就是刚才报错的地方，我把它改成了纯英文，绝对不会错
         if st.button("Start Analysis"):
             if not api_key:
                 st.error("Need API Key!")
             else:
-                with st.spinner("AI is reading..."): 
+                with st.spinner("Gemini is reading (JSON Mode)..."): 
                     text = extract_text_from_pdf(uploaded_file)
                     if text:
                         data = analyze_with_gemini(api_key, text)
                         if "error" in data:
-                            st.error(f"Error: {data['error']}")
+                            st.error(data['error'])
                         else:
                             st.session_state.form_data.update(data)
                             st.success("Done!")
                     else:
-                        st.error("PDF Error")
+                        st.error("PDF Read Error")
 
     st.markdown("---")
     with st.form("paper_form"):
