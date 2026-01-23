@@ -8,7 +8,15 @@ import json
 # --- 1. Page Config ---
 st.set_page_config(page_title="BioBrain", layout="wide", page_icon="🧠")
 
-# --- 2. Google Sheets Setup ---
+# --- 2. Secret & Database Setup ---
+# 自动读取 API Key (如果没有配置，会报错提醒)
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except FileNotFoundError:
+    st.error("请在 Secrets 里配置 GEMINI_API_KEY")
+    st.stop()
+
+# 连接 Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_data():
@@ -25,7 +33,6 @@ def save_data(new_row_df):
             updated_df = new_row_df
         else:
             updated_df = pd.concat([existing_data, new_row_df], ignore_index=True)
-        
         conn.update(worksheet="Sheet1", data=updated_df)
         return True
     except Exception as e:
@@ -43,19 +50,19 @@ def extract_text_from_pdf(uploaded_file):
     except:
         return None
 
-def analyze_with_gemini(api_key, text_content):
+def analyze_with_gemini(text_content):
     try:
-        genai.configure(api_key=api_key)
+        # 直接使用全局变量 API_KEY
+        genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('models/gemini-2.5-flash')
         
-        # 修改点 1：提示词允许 AI 返回多个分类 (List of strings)
         prompt = f"""
         Analyze this paper. Return JSON only.
         Keys: 
         - title
         - author
         - year (integer)
-        - category (List of strings. Select relevant ones from: Gene Therapy, Cell Therapy, Targets, Clinical, AI, Methodology, Review)
+        - category (List of strings. Select from: Gene Therapy, Cell Therapy, Targets, Clinical, AI, Methodology, Review, Neuroscience)
         - problem
         - finding
         - method
@@ -69,43 +76,41 @@ def analyze_with_gemini(api_key, text_content):
 
 # --- 4. Main UI ---
 st.title("🧠 BioBrain")
-st.caption("Data saved to Google Drive | Engine: Gemini 2.5")
+# 这里的 caption 也可以去掉了，因为不需要提示填 key
+# st.caption("Engine: Gemini 2.5")
 
 with st.sidebar:
-    st.header("Settings")
-    api_key = st.text_input("Gemini API Key", type="password")
+    st.header("BioBrain Pro")
+    # 输入框已经删除了！🚫
+    st.success("✅ AI System Online") # 只要能读到 Key，就显示在线
+    st.markdown("---")
     menu = st.radio("Menu", ["Log Paper", "Library"])
 
 if menu == "Log Paper":
     st.subheader("Upload PDF")
     
-    # 修改点 2：初始化 category 为空列表 []，而不是字符串
     if 'form_data' not in st.session_state:
         st.session_state.form_data = {
             "title": "", "author": "", "year": 2026, 
-            "category": [],  # 变成列表
+            "category": [],
             "problem": "", "finding": "", "method": ""
         }
 
     uploaded_file = st.file_uploader("Drop PDF here", type=["pdf"])
 
+    # 按钮逻辑简化：不需要检查 if api_key 了，因为开头已经检查过了
     if uploaded_file and st.button("Start Analysis"):
-        if not api_key:
-            st.error("Need Gemini API Key!")
-        else:
-            with st.spinner("AI is reading..."):
-                text = extract_text_from_pdf(uploaded_file)
-                if text:
-                    data = analyze_with_gemini(api_key, text)
-                    if "error" in data:
-                        st.error(data['error'])
-                    else:
-                        # 兼容性处理：防止 AI 偶尔抽风只返回字符串
-                        if isinstance(data.get('category'), str):
-                            data['category'] = [data['category']]
-                        
-                        st.session_state.form_data.update(data)
-                        st.success("Analysis Done!")
+        with st.spinner("AI is reading..."):
+            text = extract_text_from_pdf(uploaded_file)
+            if text:
+                data = analyze_with_gemini(text) # 不需要传 key 了
+                if "error" in data:
+                    st.error(data['error'])
+                else:
+                    if isinstance(data.get('category'), str):
+                        data['category'] = [data['category']]
+                    st.session_state.form_data.update(data)
+                    st.success("Analysis Done!")
 
     with st.form("paper_form"):
         c1, c2 = st.columns(2)
@@ -114,17 +119,12 @@ if menu == "Log Paper":
             author = st.text_input("Author", value=st.session_state.form_data.get("author"))
             year = st.number_input("Year", value=int(st.session_state.form_data.get("year", 2026)))
             
-            # 修改点 3：变为 st.multiselect (多选框)
             all_categories = ["Gene Therapy", "Cell Therapy", "Targets", "Clinical", "AI", "Methodology", "Review", "Neuroscience"]
-            
-            # 确保 default 是一个列表，否则报错
             default_cats = st.session_state.form_data.get("category", [])
-            if not isinstance(default_cats, list):
-                default_cats = [str(default_cats)]
-            # 过滤掉不在选项里的奇怪 tag，防止报错
+            if not isinstance(default_cats, list): default_cats = [str(default_cats)]
             default_cats = [c for c in default_cats if c in all_categories]
 
-            category = st.multiselect("Category (Multi-select)", all_categories, default=default_cats)
+            category = st.multiselect("Category", all_categories, default=default_cats)
 
         with c2:
             problem = st.text_area("Problem", value=st.session_state.form_data.get("problem"))
@@ -132,13 +132,10 @@ if menu == "Log Paper":
             method = st.text_input("Method", value=st.session_state.form_data.get("method"))
         
         if st.form_submit_button("Save to Cloud"):
-            # 修改点 4：把列表变成字符串 (List -> String)
-            # 例如: ["AI", "Gene Therapy"] -> "AI, Gene Therapy"
             category_str = ", ".join(category)
-
             new_data = pd.DataFrame([{
                 "title": title, "author": author, "year": year, 
-                "category": category_str, # 存字符串
+                "category": category_str,
                 "problem_solved": problem, 
                 "key_finding": finding, "methodology": method, "rating": 4
             }])
@@ -146,7 +143,6 @@ if menu == "Log Paper":
             with st.spinner("Saving..."):
                 if save_data(new_data):
                     st.success("✅ Saved!")
-                    st.balloons()
 
 elif menu == "Library":
     st.subheader("📚 Library")
