@@ -6,7 +6,7 @@ import google.generativeai as genai
 import json
 
 # --- 1. Page Config ---
-st.set_page_config(page_title="BioBrain Pro", layout="wide", page_icon="🧬")
+st.set_page_config(page_title="BioBrain", layout="wide", page_icon="🧠")
 
 # --- 2. Google Sheets Setup ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -68,7 +68,7 @@ def analyze_with_gemini(api_key, text_content):
         return {"error": str(e)}
 
 # --- 4. Main UI ---
-st.title("🧬 BioBrain (Multi-Category)")
+st.title("🧠 BioBrain")
 st.caption("Data saved to Google Drive | Engine: Gemini 2.5")
 
 with st.sidebar:
