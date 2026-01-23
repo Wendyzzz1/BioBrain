@@ -9,11 +9,9 @@ import json
 st.set_page_config(page_title="BioBrain Pro", layout="wide", page_icon="🧬")
 
 # --- 2. Google Sheets Setup ---
-# 连接 Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_data():
-    # 从 Google Sheet 读取数据 (ttl=0 表示不缓存，立刻刷新)
     try:
         df = conn.read(worksheet="Sheet1", ttl=0)
         return df
@@ -22,15 +20,12 @@ def get_data():
 
 def save_data(new_row_df):
     try:
-        # 1. 读取现有数据
         existing_data = get_data()
-        # 2. 如果表是空的，直接写入；如果不是，追加在后面
         if existing_data.empty:
             updated_df = new_row_df
         else:
             updated_df = pd.concat([existing_data, new_row_df], ignore_index=True)
         
-        # 3. 更新 Google Sheet
         conn.update(worksheet="Sheet1", data=updated_df)
         return True
     except Exception as e:
@@ -53,9 +48,18 @@ def analyze_with_gemini(api_key, text_content):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('models/gemini-2.5-flash')
         
+        # 修改点 1：提示词允许 AI 返回多个分类 (List of strings)
         prompt = f"""
         Analyze this paper. Return JSON only.
-        Keys: title, author, year, category, problem, finding, method.
+        Keys: 
+        - title
+        - author
+        - year (integer)
+        - category (List of strings. Select relevant ones from: Gene Therapy, Cell Therapy, Targets, Clinical, AI, Methodology, Review)
+        - problem
+        - finding
+        - method
+
         Text: {text_content[:30000]}
         """
         response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
@@ -64,21 +68,22 @@ def analyze_with_gemini(api_key, text_content):
         return {"error": str(e)}
 
 # --- 4. Main UI ---
-st.title("🧬 BioBrain (Cloud Database)")
+st.title("🧬 BioBrain (Multi-Category)")
 st.caption("Data saved to Google Drive | Engine: Gemini 2.5")
 
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Gemini API Key", type="password")
-    st.info("System Status: Online 🟢")
     menu = st.radio("Menu", ["Log Paper", "Library"])
 
 if menu == "Log Paper":
     st.subheader("Upload PDF")
     
+    # 修改点 2：初始化 category 为空列表 []，而不是字符串
     if 'form_data' not in st.session_state:
         st.session_state.form_data = {
-            "title": "", "author": "", "year": 2026, "category": "Gene Therapy",
+            "title": "", "author": "", "year": 2026, 
+            "category": [],  # 变成列表
             "problem": "", "finding": "", "method": ""
         }
 
@@ -95,6 +100,10 @@ if menu == "Log Paper":
                     if "error" in data:
                         st.error(data['error'])
                     else:
+                        # 兼容性处理：防止 AI 偶尔抽风只返回字符串
+                        if isinstance(data.get('category'), str):
+                            data['category'] = [data['category']]
+                        
                         st.session_state.form_data.update(data)
                         st.success("Analysis Done!")
 
@@ -104,32 +113,48 @@ if menu == "Log Paper":
             title = st.text_input("Title", value=st.session_state.form_data.get("title"))
             author = st.text_input("Author", value=st.session_state.form_data.get("author"))
             year = st.number_input("Year", value=int(st.session_state.form_data.get("year", 2026)))
-            category = st.selectbox("Category", ["Gene Therapy", "Cell Therapy", "Targets", "Clinical", "AI", "Methodology"])
+            
+            # 修改点 3：变为 st.multiselect (多选框)
+            all_categories = ["Gene Therapy", "Cell Therapy", "Targets", "Clinical", "AI", "Methodology", "Review", "Neuroscience"]
+            
+            # 确保 default 是一个列表，否则报错
+            default_cats = st.session_state.form_data.get("category", [])
+            if not isinstance(default_cats, list):
+                default_cats = [str(default_cats)]
+            # 过滤掉不在选项里的奇怪 tag，防止报错
+            default_cats = [c for c in default_cats if c in all_categories]
+
+            category = st.multiselect("Category (Multi-select)", all_categories, default=default_cats)
+
         with c2:
             problem = st.text_area("Problem", value=st.session_state.form_data.get("problem"))
             finding = st.text_area("Finding", value=st.session_state.form_data.get("finding"))
             method = st.text_input("Method", value=st.session_state.form_data.get("method"))
         
         if st.form_submit_button("Save to Cloud"):
+            # 修改点 4：把列表变成字符串 (List -> String)
+            # 例如: ["AI", "Gene Therapy"] -> "AI, Gene Therapy"
+            category_str = ", ".join(category)
+
             new_data = pd.DataFrame([{
                 "title": title, "author": author, "year": year, 
-                "category": category, "problem_solved": problem, 
+                "category": category_str, # 存字符串
+                "problem_solved": problem, 
                 "key_finding": finding, "methodology": method, "rating": 4
             }])
             
-            with st.spinner("Saving to Google Sheets..."):
+            with st.spinner("Saving..."):
                 if save_data(new_data):
-                    st.success("✅ Saved! Check your Google Sheet.")
+                    st.success("✅ Saved!")
                     st.balloons()
 
 elif menu == "Library":
-    st.subheader("📚 Google Sheets Data")
-    # 强制刷新按钮
-    if st.button("🔄 Refresh Data"):
+    st.subheader("📚 Library")
+    if st.button("🔄 Refresh"):
         st.cache_data.clear()
         
     df = get_data()
     if not df.empty:
         st.dataframe(df)
     else:
-        st.info("Sheet is empty. Go log some papers!")
+        st.info("Empty.")
