@@ -1,39 +1,43 @@
 import streamlit as st
-import sqlite3
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import PyPDF2
 import google.generativeai as genai
 import json
 
-# --- Page Setup ---
-st.set_page_config(page_title="BioBrain v3.0", layout="wide", page_icon="🧠")
+# --- 1. Page Config ---
+st.set_page_config(page_title="BioBrain Pro", layout="wide", page_icon="🧬")
 
-# --- Database Functions ---
-def get_connection():
-    return sqlite3.connect("biobrain.db")
+# --- 2. Google Sheets Setup ---
+# 连接 Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-def init_db():
-    conn = get_connection()
+def get_data():
+    # 从 Google Sheet 读取数据 (ttl=0 表示不缓存，立刻刷新)
     try:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS papers (
-                id INTEGER PRIMARY KEY, 
-                title TEXT, 
-                first_author TEXT, 
-                year INTEGER, 
-                category TEXT, 
-                problem_solved TEXT, 
-                key_finding TEXT, 
-                methodology TEXT, 
-                rating INTEGER
-            )
-        ''')
-        conn.commit()
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        return df
     except:
-        pass
-    finally:
-        conn.close()
+        return pd.DataFrame()
 
+def save_data(new_row_df):
+    try:
+        # 1. 读取现有数据
+        existing_data = get_data()
+        # 2. 如果表是空的，直接写入；如果不是，追加在后面
+        if existing_data.empty:
+            updated_df = new_row_df
+        else:
+            updated_df = pd.concat([existing_data, new_row_df], ignore_index=True)
+        
+        # 3. 更新 Google Sheet
+        conn.update(worksheet="Sheet1", data=updated_df)
+        return True
+    except Exception as e:
+        st.error(f"Save Error: {str(e)}")
+        return False
+
+# --- 3. AI Helper ---
 def extract_text_from_pdf(uploaded_file):
     try:
         pdf_reader = PyPDF2.PdfReader(uploaded_file)
@@ -44,58 +48,30 @@ def extract_text_from_pdf(uploaded_file):
     except:
         return None
 
-# --- AI Function (The Fix) ---
 def analyze_with_gemini(api_key, text_content):
     try:
         genai.configure(api_key=api_key)
-        
-        # 1. 设置模型
         model = genai.GenerativeModel('models/gemini-2.5-flash')
         
-        # 2. 清洗 PDF 里的脏字符 (第一道防线)
-        clean_content = text_content.encode('utf-8', 'ignore').decode('utf-8')
-        
         prompt = f"""
-        You are a research assistant. Extract data from this text.
-        Response must be valid JSON.
-        
-        Keys needed:
-        - title (string)
-        - author (string)
-        - year (integer)
-        - category (string, choose from: Gene Therapy, Cell Therapy, Targets, Clinical, AI, Methodology)
-        - problem (string)
-        - finding (string)
-        - method (string)
-
-        Text:
-        {clean_content[:30000]}
+        Analyze this paper. Return JSON only.
+        Keys: title, author, year, category, problem, finding, method.
+        Text: {text_content[:30000]}
         """
-        
-        # 3. 开启“强制 JSON 模式” (第二道防线 - 核心修复)
-        # 这会强制 AI 就算遇到脏字符，也要转义成合法的 JSON 格式
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        
-        # 4. 解析结果
+        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
         return json.loads(response.text)
-        
     except Exception as e:
-        # 如果还是出错，返回错误信息给界面
-        return {"error": f"JSON Parsing Error: {str(e)}"}
+        return {"error": str(e)}
 
-# --- Main App Logic ---
-init_db()
+# --- 4. Main UI ---
+st.title("🧬 BioBrain (Cloud Database)")
+st.caption("Data saved to Google Drive | Engine: Gemini 2.5")
 
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Gemini API Key", type="password")
-    st.markdown("---")
+    st.info("System Status: Online 🟢")
     menu = st.radio("Menu", ["Log Paper", "Library"])
-
-st.title("🧠 BioBrain")
 
 if menu == "Log Paper":
     st.subheader("Upload PDF")
@@ -108,24 +84,20 @@ if menu == "Log Paper":
 
     uploaded_file = st.file_uploader("Drop PDF here", type=["pdf"])
 
-    if uploaded_file:
-        if st.button("Start Analysis"):
-            if not api_key:
-                st.error("Need API Key!")
-            else:
-                with st.spinner("Gemini is reading (JSON Mode)..."): 
-                    text = extract_text_from_pdf(uploaded_file)
-                    if text:
-                        data = analyze_with_gemini(api_key, text)
-                        if "error" in data:
-                            st.error(data['error'])
-                        else:
-                            st.session_state.form_data.update(data)
-                            st.success("Done!")
+    if uploaded_file and st.button("Start Analysis"):
+        if not api_key:
+            st.error("Need Gemini API Key!")
+        else:
+            with st.spinner("AI is reading..."):
+                text = extract_text_from_pdf(uploaded_file)
+                if text:
+                    data = analyze_with_gemini(api_key, text)
+                    if "error" in data:
+                        st.error(data['error'])
                     else:
-                        st.error("PDF Read Error")
+                        st.session_state.form_data.update(data)
+                        st.success("Analysis Done!")
 
-    st.markdown("---")
     with st.form("paper_form"):
         c1, c2 = st.columns(2)
         with c1:
@@ -138,24 +110,26 @@ if menu == "Log Paper":
             finding = st.text_area("Finding", value=st.session_state.form_data.get("finding"))
             method = st.text_input("Method", value=st.session_state.form_data.get("method"))
         
-        if st.form_submit_button("Save"):
-            conn = get_connection()
-            conn.execute('INSERT INTO papers (title, first_author, year, category, problem_solved, key_finding, methodology, rating) VALUES (?,?,?,?,?,?,?,4)',
-                         (title, author, year, category, problem, finding, method))
-            conn.commit()
-            conn.close()
-            st.success("Saved!")
+        if st.form_submit_button("Save to Cloud"):
+            new_data = pd.DataFrame([{
+                "title": title, "author": author, "year": year, 
+                "category": category, "problem_solved": problem, 
+                "key_finding": finding, "methodology": method, "rating": 4
+            }])
+            
+            with st.spinner("Saving to Google Sheets..."):
+                if save_data(new_data):
+                    st.success("✅ Saved! Check your Google Sheet.")
+                    st.balloons()
 
 elif menu == "Library":
-    st.subheader("Library")
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM papers ORDER BY id DESC", conn)
-    conn.close()
-    
+    st.subheader("📚 Google Sheets Data")
+    # 强制刷新按钮
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        
+    df = get_data()
     if not df.empty:
-        for index, row in df.iterrows():
-            with st.expander(f"{row['title']}"):
-                st.write(f"**Problem:** {row['problem_solved']}")
-                st.write(f"**Finding:** {row['key_finding']}")
+        st.dataframe(df)
     else:
-        st.info("No papers yet.")
+        st.info("Sheet is empty. Go log some papers!")
