@@ -4,7 +4,7 @@ import pandas as pd
 import PyPDF2
 import google.generativeai as genai
 import json
-from datetime import datetime # 1. 引入时间模块
+from datetime import datetime
 
 # --- 1. Page Config ---
 st.set_page_config(page_title="BioBrain", layout="wide", page_icon="🧠")
@@ -13,7 +13,7 @@ st.set_page_config(page_title="BioBrain", layout="wide", page_icon="🧠")
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except FileNotFoundError:
-    st.error("请在 Secrets 里配置 GEMINI_API_KEY")
+    st.error("Missing GEMINI_API_KEY in Secrets.")
     st.stop()
 
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -74,7 +74,7 @@ with st.sidebar:
     menu = st.radio("Menu", ["Log Paper", "Library"])
 
 if menu == "Log Paper":
-    st.subheader("📝 录入论文 (Log Paper)")
+    st.subheader("📝 Log New Paper")
     
     if 'form_data' not in st.session_state:
         st.session_state.form_data = {
@@ -83,116 +83,124 @@ if menu == "Log Paper":
             "problem": "", "finding": "", "method": ""
         }
 
-    uploaded_file = st.file_uploader("拖拽上传 PDF", type=["pdf"])
+    uploaded_file = st.file_uploader("Drop PDF here", type=["pdf"])
 
-    if uploaded_file and st.button("🚀 开始分析"):
-        with st.spinner("AI 正在阅读..."):
+    if uploaded_file and st.button("🚀 Start Analysis"):
+        with st.spinner("AI is reading..."):
             text = extract_text_from_pdf(uploaded_file)
             if text:
                 data = analyze_with_gemini(text)
                 if "error" in data:
                     st.error(data['error'])
                 else:
+                    # Compatibility check
                     if isinstance(data.get('category'), str):
                         data['category'] = [data['category']]
                     st.session_state.form_data.update(data)
-                    st.success("✅ 分析完成！")
+                    st.success("✅ Analysis Complete!")
 
     with st.form("paper_form"):
         c1, c2 = st.columns(2)
         with c1:
-            title = st.text_input("标题", value=st.session_state.form_data.get("title"))
-            author = st.text_input("作者", value=st.session_state.form_data.get("author"))
-            year = st.number_input("年份", value=int(st.session_state.form_data.get("year", 2026)))
+            title = st.text_input("Title", value=st.session_state.form_data.get("title"))
+            author = st.text_input("Author", value=st.session_state.form_data.get("author"))
+            year = st.number_input("Year", value=int(st.session_state.form_data.get("year", 2026)))
             
+            # Categories logic
             all_categories = ["Gene Therapy", "Cell Therapy", "Targets", "Clinical", "AI", "Methodology", "Review", "Neuroscience"]
             current_cats = st.session_state.form_data.get("category", [])
             if not isinstance(current_cats, list): current_cats = [str(current_cats)]
             
+            # Split into presets and custom tags
             default_selection = [c for c in current_cats if c in all_categories]
             new_suggestions = [c for c in current_cats if c not in all_categories]
             
-            selected_cats = st.multiselect("选择分类 (预设)", all_categories, default=default_selection)
+            selected_cats = st.multiselect("Categories (Preset)", all_categories, default=default_selection)
+            
             extra_cats_str = ", ".join(new_suggestions)
-            custom_tags = st.text_input("➕ 自定义标签 (逗号分隔)", value=extra_cats_str)
+            custom_tags = st.text_input("➕ Custom Tags (comma separated)", value=extra_cats_str, placeholder="e.g. Metabolism, Cancer")
 
         with c2:
-            problem = st.text_area("研究问题", value=st.session_state.form_data.get("problem"), height=100)
-            finding = st.text_area("核心发现", value=st.session_state.form_data.get("finding"), height=100)
-            method = st.text_input("方法", value=st.session_state.form_data.get("method"))
+            problem = st.text_area("Problem Solved", value=st.session_state.form_data.get("problem"), height=100)
+            finding = st.text_area("Key Finding", value=st.session_state.form_data.get("finding"), height=100)
+            method = st.text_input("Methodology", value=st.session_state.form_data.get("method"))
         
-        if st.form_submit_button("💾 保存到云端"):
+        if st.form_submit_button("💾 Save to Cloud"):
+            # Merge tags
             final_tags = selected_cats
             if custom_tags:
                 final_tags.extend([t.strip() for t in custom_tags.split(',') if t.strip()])
             final_tags = sorted(list(set(final_tags)))
             category_str = ", ".join(final_tags)
 
-            # 2. 记录当前录入时间
+            # Get current time
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 
             new_data = pd.DataFrame([{
-                "date_added": current_time,  # 👈 存入时间
+                "date_added": current_time,
                 "title": title, "author": author, "year": year, 
                 "category": category_str,
                 "problem_solved": problem, 
                 "key_finding": finding, "methodology": method, "rating": 4
             }])
             
-            with st.spinner("正在写入 Google Sheets..."):
+            with st.spinner("Saving to Google Sheets..."):
                 if save_data(new_data):
-                    st.success(f"✅ 已保存！录入时间: {current_time}")
+                    st.success(f"✅ Saved! Date Added: {current_time}")
 
 elif menu == "Library":
-    st.subheader("📚 论文知识库")
-    if st.button("🔄 刷新数据"):
+    st.subheader("📚 Library")
+    if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
     
     df = get_data()
 
     if not df.empty:
-        # 3. 处理历史数据可能没有时间的问题
+        # Ensure date_added exists for old data
         if "date_added" not in df.columns:
             df["date_added"] = "2024-01-01 00:00"
 
         df['category'] = df['category'].astype(str)
-        # 按“录入时间”倒序排列
+        # Sort: Newest date_added first
         df_sorted = df.sort_values(by="date_added", ascending=False)
 
+        # Extract all unique tags
         all_tags = set()
         for cat_str in df['category']:
             tags = [t.strip() for t in cat_str.split(',') if t.strip()]
             all_tags.update(tags)
         sorted_tags = sorted(list(all_tags))
 
-        tabs = st.tabs(["🕒 最新录入"] + sorted_tags)
+        # Create Tabs
+        tabs = st.tabs(["🕒 Timeline"] + sorted_tags)
 
-        # Tab 1: 时间轴视图
+        # Tab 1: Timeline View
         with tabs[0]:
-            st.caption("按录入时间倒序 (最新在最上)")
+            st.caption("Sorted by Date Added (Newest First)")
             st.dataframe(
                 df_sorted, 
                 use_container_width=True,
                 column_config={
-                    "date_added": "录入时间", # 显示时间列
-                    "rating": st.column_config.NumberColumn("评分", format="%d ⭐"),
-                    "year": st.column_config.NumberColumn("年份", format="%d"),
-                    "category": "分类标签"
+                    "date_added": "Date Added",
+                    "rating": st.column_config.NumberColumn("Rating", format="%d ⭐"),
+                    "year": st.column_config.NumberColumn("Year", format="%d"),
+                    "category": "Tags"
                 }
             )
 
-        # Tab 2+: 分类视图
+        # Tab 2+: Category Views
         for i, tag in enumerate(sorted_tags):
             with tabs[i+1]:
+                # Filter rows containing the tag
                 filtered_df = df_sorted[df_sorted['category'].str.contains(tag, regex=False, case=False)]
-                st.info(f"📂 '{tag}' 类目下共 {len(filtered_df)} 篇")
+                st.info(f"📂 Papers tagged '{tag}': {len(filtered_df)}")
                 st.dataframe(
                     filtered_df, 
                     use_container_width=True,
                     column_config={
-                        "date_added": "录入时间",
-                        "year": st.column_config.NumberColumn("年份", format="%d")
+                        "date_added": "Date Added",
+                        "year": st.column_config.NumberColumn("Year", format="%d")
                     }
                 )
     else:
-        st.info("暂无数据")
+        st.info("Library is empty. Go to 'Log Paper' to add your first entry!")
