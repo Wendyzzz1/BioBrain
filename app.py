@@ -150,31 +150,54 @@ if menu == "Log Paper":
 
 elif menu == "Library":
     st.subheader("📚 Library")
+    
+    # 刷新按钮
     if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
+        st.rerun()
     
     df = get_data()
 
     if not df.empty:
-        # Ensure date_added exists for old data
+        # --- 🔥 新增：删除功能区域 ---
+        with st.expander("🗑️ Delete Paper (Manage)"):
+            st.warning("⚠️ Warning: Deletion is permanent.")
+            
+            # 获取所有标题供选择
+            all_titles = df['title'].tolist()
+            # 下拉框选择要删的论文
+            paper_to_delete = st.selectbox("Select paper to remove:", options=all_titles, index=None, placeholder="Choose a title...")
+            
+            if paper_to_delete:
+                if st.button(f"Delete '{paper_to_delete}'"):
+                    # 1. 过滤掉这篇论文 (保留标题不等于它的所有行)
+                    # 注意：如果有重名标题，会一起删掉
+                    new_df = df[df['title'] != paper_to_delete]
+                    
+                    with st.spinner("Deleting..."):
+                        # 2. 把剩下的数据写回 Google Sheet (覆盖旧数据)
+                        conn.update(worksheet="Sheet1", data=new_df)
+                        st.cache_data.clear() # 清除缓存，强制刷新
+                        st.success(f"✅ Deleted: {paper_to_delete}")
+                        st.rerun() # 立即刷新页面
+
+        st.markdown("---") # 分割线
+
+        # --- 下面是原来的显示逻辑 (不变) ---
         if "date_added" not in df.columns:
             df["date_added"] = "2024-01-01 00:00"
 
         df['category'] = df['category'].astype(str)
-        # Sort: Newest date_added first
         df_sorted = df.sort_values(by="date_added", ascending=False)
 
-        # Extract all unique tags
         all_tags = set()
         for cat_str in df['category']:
             tags = [t.strip() for t in cat_str.split(',') if t.strip()]
             all_tags.update(tags)
         sorted_tags = sorted(list(all_tags))
 
-        # Create Tabs
         tabs = st.tabs(["🕒 Timeline"] + sorted_tags)
 
-        # Tab 1: Timeline View
         with tabs[0]:
             st.caption("Sorted by Date Added (Newest First)")
             st.dataframe(
@@ -188,10 +211,8 @@ elif menu == "Library":
                 }
             )
 
-        # Tab 2+: Category Views
         for i, tag in enumerate(sorted_tags):
             with tabs[i+1]:
-                # Filter rows containing the tag
                 filtered_df = df_sorted[df_sorted['category'].str.contains(tag, regex=False, case=False)]
                 st.info(f"📂 Papers tagged '{tag}': {len(filtered_df)}")
                 st.dataframe(
