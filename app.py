@@ -162,4 +162,89 @@ if menu == "Log Paper":
         
         with col_left:
             problem = st.text_area("🎯 Problem Solved", value=st.session_state.form_data.get("problem"), height=150)
-            method = st.text_input("🛠️ Methodology", value=st.session
+            method = st.text_input("🛠️ Methodology", value=st.session_state.form_data.get("method"))
+            
+        with col_right:
+            finding = st.text_area("💡 Key Finding", value=st.session_state.form_data.get("finding"), height=150)
+            # 🔥 Update 3: New Input Field for Limitation
+            limitation = st.text_area("⚠️ Limitation / Unsolved", value=st.session_state.form_data.get("limitation", ""), height=100)
+
+        if st.form_submit_button("💾 Save to Cloud"):
+            final_tags = selected_cats
+            if custom_tags:
+                final_tags.extend([t.strip() for t in custom_tags.split(',') if t.strip()])
+            final_tags = sorted(list(set(final_tags)))
+            category_str = ", ".join(final_tags)
+
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+            new_data = pd.DataFrame([{
+                "date_added": current_time,
+                "title": title, "author": author, "year": year, 
+                "category": category_str,
+                "problem_solved": problem, 
+                "key_finding": finding, 
+                "methodology": method, 
+                "limitation": limitation, # 🔥 Update 4: Save limitation
+                "rating": 4
+            }])
+            
+            with st.spinner("Saving to Google Sheets..."):
+                if save_data(new_data):
+                    st.success(f"✅ Saved! Date Added: {current_time}")
+
+elif menu == "Library":
+    st.subheader("📚 Library")
+    
+    if st.button("🔄 Refresh"):
+        st.cache_data.clear()
+        st.rerun()
+    
+    df = get_data()
+
+    if not df.empty:
+        # Data Cleanup
+        if "date_added" not in df.columns: df["date_added"] = "2024-01-01 00:00"
+        if "limitation" not in df.columns: df["limitation"] = "N/A" # Handle old data
+
+        df['category'] = df['category'].astype(str)
+        df_sorted = df.sort_values(by="date_added", ascending=False)
+
+        # Deletion Logic
+        with st.expander("🗑️ Delete Paper (Manage)"):
+            all_titles = df['title'].tolist()
+            paper_to_delete = st.selectbox("Select paper to remove:", options=all_titles, index=None)
+            if paper_to_delete and st.button(f"Delete '{paper_to_delete}'"):
+                new_df = df[df['title'] != paper_to_delete]
+                conn.update(worksheet="Sheet1", data=new_df)
+                st.cache_data.clear()
+                st.rerun()
+
+        st.markdown("---")
+
+        # Tabs Setup
+        all_tags = set()
+        for cat_str in df['category']:
+            tags = [t.strip() for t in cat_str.split(',') if t.strip()]
+            all_tags.update(tags)
+        sorted_tags = sorted(list(all_tags))
+        
+        tabs = st.tabs(["🕒 Timeline"] + sorted_tags)
+
+        # 🔥 Update 5: Card View Implementation
+        # Tab 1: Timeline
+        with tabs[0]:
+            st.caption(f"Showing {len(df_sorted)} papers (Newest first)")
+            for index, row in df_sorted.iterrows():
+                display_paper_card(row) # Call helper function
+
+        # Tab 2+: Categories
+        for i, tag in enumerate(sorted_tags):
+            with tabs[i+1]:
+                filtered_df = df_sorted[df_sorted['category'].str.contains(tag, regex=False, case=False)]
+                st.caption(f"Showing {len(filtered_df)} papers in '{tag}'")
+                for index, row in filtered_df.iterrows():
+                    display_paper_card(row) # Call helper function
+
+    else:
+        st.info("Library is empty.")
