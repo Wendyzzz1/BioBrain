@@ -54,15 +54,50 @@ def analyze_with_gemini(text_content):
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('models/gemini-2.5-flash')
         
+        # 🔥 Update 1: Added 'limitation' to the prompt
         prompt = f"""
         Analyze this paper. Return JSON only.
-        Keys: title, author, year, category (List), problem, finding, method.
+        Keys: 
+        - title
+        - author
+        - year (integer)
+        - category (List)
+        - problem (What problem is solved?)
+        - finding (Key results?)
+        - method (Methodology used?)
+        - limitation (What are the limitations or unsolved issues mentioned?)
+
         Text: {text_content[:30000]}
         """
         response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
         return json.loads(response.text)
     except Exception as e:
         return {"error": str(e)}
+
+# --- Helper to display a single paper card ---
+def display_paper_card(row):
+    # This creates the expandable card UI
+    # Header: Title (Year) [Tags]
+    card_title = f"📄 {row['title']} ({int(row['year'])})"
+    
+    with st.expander(card_title):
+        st.caption(f"**Author:** {row['author']} | **Added:** {row['date_added']}")
+        st.markdown(f"🏷️ **Tags:** `{row['category']}`")
+        st.divider()
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 🎯 Problem & Finding")
+            st.info(f"**Problem:** {row['problem_solved']}")
+            st.success(f"**Finding:** {row['key_finding']}")
+        
+        with c2:
+            st.markdown("#### 🛠️ Method & Limitation")
+            st.warning(f"**Method:** {row['methodology']}")
+            # Handle old data that might not have 'limitation' yet
+            lim = row.get('limitation', 'N/A')
+            if pd.isna(lim) or lim == "": lim = "Not specified"
+            st.error(f"**Limitation:** {lim}")
 
 # --- 4. Main UI ---
 st.title("🧠 BioBrain")
@@ -80,148 +115,51 @@ if menu == "Log Paper":
         st.session_state.form_data = {
             "title": "", "author": "", "year": 2026, 
             "category": [],
-            "problem": "", "finding": "", "method": ""
+            "problem": "", "finding": "", "method": "", 
+            "limitation": "" # 🔥 Update 2: Init limitation
         }
 
     uploaded_file = st.file_uploader("Drop PDF here", type=["pdf"])
 
     if uploaded_file and st.button("🚀 Start Analysis"):
-        with st.spinner("AI is reading..."):
+        with st.spinner("AI is analyzing (including limitations)..."):
             text = extract_text_from_pdf(uploaded_file)
             if text:
                 data = analyze_with_gemini(text)
                 if "error" in data:
                     st.error(data['error'])
                 else:
-                    # Compatibility check
                     if isinstance(data.get('category'), str):
                         data['category'] = [data['category']]
                     st.session_state.form_data.update(data)
                     st.success("✅ Analysis Complete!")
 
     with st.form("paper_form"):
+        # Top Metadata
         c1, c2 = st.columns(2)
         with c1:
             title = st.text_input("Title", value=st.session_state.form_data.get("title"))
             author = st.text_input("Author", value=st.session_state.form_data.get("author"))
             year = st.number_input("Year", value=int(st.session_state.form_data.get("year", 2026)))
-            
-            # Categories logic
+        
+        with c2:
+             # Categories logic
             all_categories = ["Gene Therapy", "Cell Therapy", "Targets", "Clinical", "AI", "Methodology", "Review", "Neuroscience"]
             current_cats = st.session_state.form_data.get("category", [])
             if not isinstance(current_cats, list): current_cats = [str(current_cats)]
             
-            # Split into presets and custom tags
             default_selection = [c for c in current_cats if c in all_categories]
             new_suggestions = [c for c in current_cats if c not in all_categories]
             
-            selected_cats = st.multiselect("Categories (Preset)", all_categories, default=default_selection)
-            
+            selected_cats = st.multiselect("Categories", all_categories, default=default_selection)
             extra_cats_str = ", ".join(new_suggestions)
-            custom_tags = st.text_input("➕ Custom Tags (comma separated)", value=extra_cats_str, placeholder="e.g. Metabolism, Cancer")
+            custom_tags = st.text_input("➕ Custom Tags", value=extra_cats_str)
 
-        with c2:
-            problem = st.text_area("Problem Solved", value=st.session_state.form_data.get("problem"), height=100)
-            finding = st.text_area("Key Finding", value=st.session_state.form_data.get("finding"), height=100)
-            method = st.text_input("Methodology", value=st.session_state.form_data.get("method"))
+        st.markdown("---")
         
-        if st.form_submit_button("💾 Save to Cloud"):
-            # Merge tags
-            final_tags = selected_cats
-            if custom_tags:
-                final_tags.extend([t.strip() for t in custom_tags.split(',') if t.strip()])
-            final_tags = sorted(list(set(final_tags)))
-            category_str = ", ".join(final_tags)
-
-            # Get current time
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-            new_data = pd.DataFrame([{
-                "date_added": current_time,
-                "title": title, "author": author, "year": year, 
-                "category": category_str,
-                "problem_solved": problem, 
-                "key_finding": finding, "methodology": method, "rating": 4
-            }])
-            
-            with st.spinner("Saving to Google Sheets..."):
-                if save_data(new_data):
-                    st.success(f"✅ Saved! Date Added: {current_time}")
-
-elif menu == "Library":
-    st.subheader("📚 Library")
-    
-    # 刷新按钮
-    if st.button("🔄 Refresh Data"):
-        st.cache_data.clear()
-        st.rerun()
-    
-    df = get_data()
-
-    if not df.empty:
-        # --- 🔥 新增：删除功能区域 ---
-        with st.expander("🗑️ Delete Paper (Manage)"):
-            st.warning("⚠️ Warning: Deletion is permanent.")
-            
-            # 获取所有标题供选择
-            all_titles = df['title'].tolist()
-            # 下拉框选择要删的论文
-            paper_to_delete = st.selectbox("Select paper to remove:", options=all_titles, index=None, placeholder="Choose a title...")
-            
-            if paper_to_delete:
-                if st.button(f"Delete '{paper_to_delete}'"):
-                    # 1. 过滤掉这篇论文 (保留标题不等于它的所有行)
-                    # 注意：如果有重名标题，会一起删掉
-                    new_df = df[df['title'] != paper_to_delete]
-                    
-                    with st.spinner("Deleting..."):
-                        # 2. 把剩下的数据写回 Google Sheet (覆盖旧数据)
-                        conn.update(worksheet="Sheet1", data=new_df)
-                        st.cache_data.clear() # 清除缓存，强制刷新
-                        st.success(f"✅ Deleted: {paper_to_delete}")
-                        st.rerun() # 立即刷新页面
-
-        st.markdown("---") # 分割线
-
-        # --- 下面是原来的显示逻辑 (不变) ---
-        if "date_added" not in df.columns:
-            df["date_added"] = "2024-01-01 00:00"
-
-        df['category'] = df['category'].astype(str)
-        df_sorted = df.sort_values(by="date_added", ascending=False)
-
-        all_tags = set()
-        for cat_str in df['category']:
-            tags = [t.strip() for t in cat_str.split(',') if t.strip()]
-            all_tags.update(tags)
-        sorted_tags = sorted(list(all_tags))
-
-        tabs = st.tabs(["🕒 Timeline"] + sorted_tags)
-
-        with tabs[0]:
-            st.caption("Sorted by Date Added (Newest First)")
-            st.dataframe(
-                df_sorted, 
-                use_container_width=True,
-                column_config={
-                    "date_added": "Date Added",
-                    "rating": st.column_config.NumberColumn("Rating", format="%d ⭐"),
-                    "year": st.column_config.NumberColumn("Year", format="%d"),
-                    "category": "Tags"
-                }
-            )
-
-        for i, tag in enumerate(sorted_tags):
-            with tabs[i+1]:
-                filtered_df = df_sorted[df_sorted['category'].str.contains(tag, regex=False, case=False)]
-                st.info(f"📂 Papers tagged '{tag}': {len(filtered_df)}")
-                st.dataframe(
-                    filtered_df, 
-                    use_container_width=True,
-                    column_config={
-                        "date_added": "Date Added",
-                        "year": st.column_config.NumberColumn("Year", format="%d")
-                    }
-                )
-    else:
-        st.info("Library is empty. Go to 'Log Paper' to add your first entry!")
+        # Detailed Content
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            problem = st.text_area("🎯 Problem Solved", value=st.session_state.form_data.get("problem"), height=150)
+            method = st.text_input("🛠️ Methodology", value=st.session
