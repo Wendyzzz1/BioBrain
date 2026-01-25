@@ -196,21 +196,23 @@ if menu == "Log Paper":
 elif menu == "Library":
     st.subheader("📚 Library")
     
-    if st.button("🔄 Refresh"):
+    # 1. 刷新按钮
+    if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
         st.rerun()
     
     df = get_data()
 
     if not df.empty:
-        # Data Cleanup
+        # 数据清洗
         if "date_added" not in df.columns: df["date_added"] = "2024-01-01 00:00"
-        if "limitation" not in df.columns: df["limitation"] = "N/A" # Handle old data
-
+        if "limitation" not in df.columns: df["limitation"] = "N/A"
         df['category'] = df['category'].astype(str)
+        
+        # 按时间倒序准备数据
         df_sorted = df.sort_values(by="date_added", ascending=False)
 
-        # Deletion Logic
+        # --- 🗑️ 管理区域 (删除功能) ---
         with st.expander("🗑️ Delete Paper (Manage)"):
             all_titles = df['title'].tolist()
             paper_to_delete = st.selectbox("Select paper to remove:", options=all_titles, index=None)
@@ -222,29 +224,52 @@ elif menu == "Library":
 
         st.markdown("---")
 
-        # Tabs Setup
-        all_tags = set()
-        for cat_str in df['category']:
-            tags = [t.strip() for t in cat_str.split(',') if t.strip()]
-            all_tags.update(tags)
-        sorted_tags = sorted(list(all_tags))
-        
-        tabs = st.tabs(["🕒 Timeline"] + sorted_tags)
+        # --- 🔍 核心升级：全局搜索框 ---
+        # 放在 Tab 之前，最显眼的位置
+        search_query = st.text_input("🔍 Search Library (Keywords, Title, Content...)", placeholder="Type anything to search...")
 
-        # 🔥 Update 5: Card View Implementation
-        # Tab 1: Timeline
-        with tabs[0]:
-            st.caption(f"Showing {len(df_sorted)} papers (Newest first)")
-            for index, row in df_sorted.iterrows():
-                display_paper_card(row) # Call helper function
+        # --- 🔀 分支逻辑：搜索 vs 浏览 ---
+        if search_query:
+            # 🔎 进入搜索模式
+            st.caption(f"Searching for: **'{search_query}'**")
+            
+            # 暴力搜索：把每一行的所有内容拼成一个大字符串，然后看包含不包含关键词
+            # case=False 表示不区分大小写 (AI = ai)
+            mask = df_sorted.astype(str).apply(
+                lambda row: row.str.contains(search_query, case=False).any(), axis=1
+            )
+            search_results = df_sorted[mask]
+            
+            if not search_results.empty:
+                st.success(f"Found {len(search_results)} matches:")
+                for index, row in search_results.iterrows():
+                    display_paper_card(row) # 调用之前的卡片显示函数
+            else:
+                st.warning("No results found.")
+                
+        else:
+            # 📂 没搜索时，显示原来的 Tab 浏览模式
+            all_tags = set()
+            for cat_str in df['category']:
+                tags = [t.strip() for t in cat_str.split(',') if t.strip()]
+                all_tags.update(tags)
+            sorted_tags = sorted(list(all_tags))
+            
+            tabs = st.tabs(["🕒 Timeline"] + sorted_tags)
 
-        # Tab 2+: Categories
-        for i, tag in enumerate(sorted_tags):
-            with tabs[i+1]:
-                filtered_df = df_sorted[df_sorted['category'].str.contains(tag, regex=False, case=False)]
-                st.caption(f"Showing {len(filtered_df)} papers in '{tag}'")
-                for index, row in filtered_df.iterrows():
-                    display_paper_card(row) # Call helper function
+            # Tab 1: Timeline
+            with tabs[0]:
+                st.caption(f"Showing {len(df_sorted)} papers (Newest first)")
+                for index, row in df_sorted.iterrows():
+                    display_paper_card(row)
+
+            # Tab 2+: Categories
+            for i, tag in enumerate(sorted_tags):
+                with tabs[i+1]:
+                    filtered_df = df_sorted[df_sorted['category'].str.contains(tag, regex=False, case=False)]
+                    st.caption(f"Showing {len(filtered_df)} papers in '{tag}'")
+                    for index, row in filtered_df.iterrows():
+                        display_paper_card(row)
 
     else:
         st.info("Library is empty.")
